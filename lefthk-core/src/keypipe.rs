@@ -1,6 +1,4 @@
-use crate::config::command;
-use crate::config::command::utils::normalized_command::NormalizedCommand;
-use crate::config::Command;
+use crate::keyevent::KeyEvent;
 use crate::errors::Result;
 use std::path::{Path, PathBuf};
 use tokio::{
@@ -9,12 +7,12 @@ use tokio::{
     sync::mpsc,
 };
 
-pub struct CommandPipe {
+pub struct KeyPipe {
     pipe_file: PathBuf,
-    rx: mpsc::UnboundedReceiver<NormalizedCommand>,
+    rx: mpsc::UnboundedReceiver<KeyEvent>,
 }
 
-impl Drop for CommandPipe {
+impl Drop for KeyPipe {
     fn drop(&mut self) {
         use std::os::unix::fs::OpenOptionsExt;
         self.rx.close();
@@ -28,7 +26,7 @@ impl Drop for CommandPipe {
     }
 }
 
-impl CommandPipe {
+impl KeyPipe {
     /// Create and listen to the named pipe.
     /// # Errors
     ///
@@ -56,29 +54,27 @@ impl CommandPipe {
             .and_then(|d| d.rsplit_once(':').map(|(_, r)| r.to_owned()))
             .unwrap_or_else(|| "0".to_string());
 
-        PathBuf::from(format!("command-{}.pipe", display))
+        PathBuf::from(format!("keyevent-{}.pipe", display))
     }
 
-    pub async fn get_next_command(&mut self) -> Option<Box<dyn Command>> {
-        if let Some(normalized_command) = self.rx.recv().await {
-            return command::denormalize(&normalized_command).ok();
+    pub async fn get_next_event(&mut self) -> Option<KeyEvent> {
+        if let Some(event) = self.rx.recv().await {
+            return Some(event); 
         }
         None
     }
 }
 
-async fn read_from_pipe<'a>(pipe_file: &Path, tx: &mpsc::UnboundedSender<NormalizedCommand>) {
+async fn read_from_pipe<'a>(pipe_file: &Path, tx: &mpsc::UnboundedSender<KeyEvent>) {
     if let Ok(file) = fs::File::open(pipe_file).await {
         let mut lines = BufReader::new(file).lines();
 
         while let Ok(line) = lines.next_line().await {
             if let Some(content) = line {
-                if let Ok(normalized_command) = NormalizedCommand::try_from(content) {
-                    if command::denormalize(&normalized_command.clone()).is_ok() {
-                        if let Err(err) = tx.send(normalized_command) {
+                if let Ok(event) = KeyEvent::try_from(content) {
+                        if let Err(err) = tx.send(event) {
                             tracing::error!("{}", err);
                         }
-                    }
                 }
             }
         }

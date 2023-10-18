@@ -3,7 +3,10 @@ pub mod context;
 use crate::child::Children;
 use crate::config::{command, Keybind};
 use crate::errors::{self, Error, LeftError};
-use crate::ipc::Pipe;
+use crate::ipc::CommandPipe;
+use crate::keyevent::KeyEvent;
+use crate::keypipe::KeyPipe;
+use crate::mode::Mode;
 use crate::xkeysym_lookup;
 use crate::xwrap::XWrap;
 use x11_dl::xlib;
@@ -20,6 +23,8 @@ pub struct Worker {
     keybinds: Vec<Keybind>,
     base_directory: BaseDirectories,
 
+    mode: Mode,
+
     pub xwrap: XWrap,
     pub children: Children,
     pub status: Status,
@@ -29,11 +34,12 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn new(keybinds: Vec<Keybind>, base_directory: BaseDirectories) -> Self {
+    pub fn new(keybinds: Vec<Keybind>, base_directory: BaseDirectories, mode: Mode) -> Self {
         Self {
             status: Status::Continue,
             keybinds,
             base_directory,
+            mode,
             xwrap: XWrap::new(),
             children: Children::default(),
             chord_ctx: context::Chord::new(),
@@ -44,35 +50,73 @@ impl Worker {
         self.xwrap.grab_keys(&self.keybinds);
         let mut pipe = self.get_pipe().await;
 
-        while self.status == Status::Continue {
-            self.xwrap.flush();
+        match self.mode {
+            Mode::Xlib => {
+                while self.status == Status::Continue {
+                    self.xwrap.flush();
 
-            self.evaluate_chord();
+                    self.evaluate_chord_xlib();
 
-            tokio::select! {
-                _ = self.children.wait_readable() => {
-                    self.children.reap();
+                    tokio::select! {
+                        _ = self.children.wait_readable() => {
+                            self.children.reap();
+                        }
+                        _ = self.xwrap.wait_readable() => {
+                            let event_in_queue = self.xwrap.queue_len();
+                            for _ in 0..event_in_queue {
+                                let xlib_event = self.xwrap.get_next_event();
+                                self.handle_event(&xlib_event);
+                            }
+                        }
+                        Some(command) = pipe.get_next_command() => {
+                            errors::log_on_error!(command.execute(&mut self));
+                        }
+                    };
                 }
-                _ = self.xwrap.wait_readable() => {
-                    let event_in_queue = self.xwrap.queue_len();
-                    for _ in 0..event_in_queue {
-                        let xlib_event = self.xwrap.get_next_event();
-                        self.handle_event(&xlib_event);
-                    }
+            }, 
+            Mode::Pipe => {
+                let mut key_pipe = self.get_keyevent_pipe().await;
+
+                while self.status == Status::Continue {
+                    self.evaluate_chord_pipe();
+
+                    tokio::select! {
+                        _ = self.children.wait_readable() => {
+                            self.children.reap();
+                        }
+                        Some(event) = key_pipe.get_next_event() => {
+                            let KeyEvent{modmask: mask, keysym: key} = event; 
+
+                            if let Some(keybind) = self.get_keybind((mask, key)) {
+                                if let Ok(command) = command::denormalize(&keybind.command) {
+                                    errors::log_on_error!(command.execute(&mut self));
+                                }
+                            } else {
+                                errors::log_on_error!(Err(LeftError::CommandNotFound));
+                            }
+                        }
+                        Some(command) = pipe.get_next_command() => {
+                            errors::log_on_error!(command.execute(&mut self));
+                        }
+                    };
                 }
-                Some(command) = pipe.get_next_command() => {
-                    errors::log_on_error!(command.execute(&mut self));
-                }
-            };
+
+            },
         }
 
         self.status
     }
 
-    async fn get_pipe(&self) -> Pipe {
-        let pipe_name = Pipe::pipe_name();
+    async fn get_pipe(&self) -> CommandPipe {
+        let pipe_name = CommandPipe::pipe_name();
         let pipe_file = errors::exit_on_error!(self.base_directory.place_runtime_file(pipe_name));
-        errors::exit_on_error!(Pipe::new(pipe_file).await)
+        errors::exit_on_error!(CommandPipe::new(pipe_file).await)
+    }
+
+    async fn get_keyevent_pipe(&self) -> KeyPipe {
+        let pipe_name = KeyPipe::pipe_name();
+        let pipe_file = errors::exit_on_error!(self.base_directory.place_runtime_file(pipe_name));
+        errors::exit_on_error!(KeyPipe::new(pipe_file).await)
     }
 
     fn handle_event(&mut self, xlib_event: &xlib::XEvent) {

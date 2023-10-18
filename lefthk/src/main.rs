@@ -1,7 +1,8 @@
 use crate::errors::LeftError;
 use clap::{App, Arg};
 use lefthk_core::config::{command, Command};
-use lefthk_core::ipc::Pipe;
+use lefthk_core::ipc::CommandPipe;
+use lefthk_core::mode::Mode;
 use lefthk_core::worker::Status;
 use lefthk_core::{config::Config, worker::Worker};
 use std::fs;
@@ -48,9 +49,14 @@ fn main() {
             let completed = std::panic::catch_unwind(|| {
                 let rt = errors::return_on_error!(tokio::runtime::Runtime::new());
                 let _rt_guard = rt.enter();
+                let mode = match std::env::var("LEFTHK_USE_PIPE") {
+                    Ok(_) => Mode::Pipe,
+                    Err(_) => Mode::Xlib,
+                };
 
-                let status =
-                    rt.block_on(Worker::new(config.mapped_bindings(), path.clone()).event_loop());
+                let status = rt.block_on(
+                    Worker::new(config.mapped_bindings(), path.clone(), mode).event_loop(),
+                );
                 kill_requested.store(status == Status::Kill, Ordering::SeqCst);
             });
 
@@ -68,7 +74,7 @@ fn main() {
 
 fn send_command(command: &impl Command) {
     let path = errors::exit_on_error!(BaseDirectories::with_prefix(lefthk_core::LEFTHK_DIR_NAME));
-    let pipe_name = Pipe::pipe_name();
+    let pipe_name = CommandPipe::pipe_name();
     let pipe_file = errors::exit_on_error!(path.place_runtime_file(pipe_name));
     let mut pipe = fs::OpenOptions::new().write(true).open(&pipe_file).unwrap();
     writeln!(pipe, "{}", command.normalize()).unwrap();

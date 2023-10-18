@@ -19,14 +19,14 @@ mod ipc {
 
     use crate::config::command::Reload;
     use crate::config::Command;
-    use crate::ipc::Pipe;
+    use crate::ipc::CommandPipe;
 
     use super::test::temp_path;
 
     #[tokio::test]
     async fn simulate_command_sending() {
-        let pipe_file = temp_path().unwrap();
-        let mut command_pipe = Pipe::new(pipe_file.clone()).await.unwrap();
+        let pipe_file = temp_path().await.unwrap();
+        let mut command_pipe = CommandPipe::new(pipe_file.clone()).await.unwrap();
         let mut pipe = fs::OpenOptions::new()
             .write(true)
             .open(&pipe_file)

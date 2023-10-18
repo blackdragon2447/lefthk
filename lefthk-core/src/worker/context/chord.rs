@@ -16,9 +16,16 @@ impl Chord {
 }
 
 impl Worker {
-    pub fn evaluate_chord(&mut self) {
+    pub fn evaluate_chord_xlib(&mut self) {
         if self.chord_ctx.elapsed {
             self.xwrap.grab_keys(&self.keybinds);
+            self.chord_ctx.keybinds = None;
+            self.chord_ctx.elapsed = false;
+        }
+    }
+
+    pub fn evaluate_chord_pipe(&mut self) {
+        if self.chord_ctx.elapsed {
             self.chord_ctx.keybinds = None;
             self.chord_ctx.elapsed = false;
         }
