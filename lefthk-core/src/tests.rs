@@ -1,7 +1,7 @@
 /// Test Helpers
 #[cfg(test)]
 pub(crate) mod test {
-    pub fn temp_path() -> std::io::Result<std::path::PathBuf> {
+    pub async fn temp_path() -> std::io::Result<std::path::PathBuf> {
         tempfile::Builder::new()
             .tempfile_in("../target")
             .expect("Blocking task joined")

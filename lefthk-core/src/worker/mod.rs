@@ -25,7 +25,7 @@ pub struct Worker {
 
     mode: Mode,
 
-    pub xwrap: XWrap,
+    pub xwrap: Option<XWrap>,
     pub children: Children,
     pub status: Status,
 
@@ -35,25 +35,38 @@ pub struct Worker {
 
 impl Worker {
     pub fn new(keybinds: Vec<Keybind>, base_directory: BaseDirectories, mode: Mode) -> Self {
-        Self {
-            status: Status::Continue,
-            keybinds,
-            base_directory,
-            mode,
-            xwrap: XWrap::new(),
-            children: Children::default(),
-            chord_ctx: context::Chord::new(),
+        match mode {
+            Mode::Xlib => 
+                Self {
+                    status: Status::Continue,
+                    keybinds,
+                    base_directory,
+                    mode,
+                    xwrap: Some(XWrap::new()),
+                    children: Children::default(),
+                    chord_ctx: context::Chord::new(),
+                },
+                Mode::Pipe =>
+                    Self {
+                        status: Status::Continue,
+                        keybinds,
+                        base_directory,
+                        mode,
+                        xwrap: None,
+                        children: Children::default(),
+                        chord_ctx: context::Chord::new(),
+                    }
         }
     }
 
     pub async fn event_loop(mut self) -> Status {
-        self.xwrap.grab_keys(&self.keybinds);
         let mut pipe = self.get_pipe().await;
 
         match self.mode {
             Mode::Xlib => {
+                self.xwrap.as_ref().unwrap().grab_keys(&self.keybinds);
                 while self.status == Status::Continue {
-                    self.xwrap.flush();
+                    self.xwrap.as_ref().unwrap().flush();
 
                     self.evaluate_chord_xlib();
 
@@ -61,10 +74,10 @@ impl Worker {
                         _ = self.children.wait_readable() => {
                             self.children.reap();
                         }
-                        _ = self.xwrap.wait_readable() => {
-                            let event_in_queue = self.xwrap.queue_len();
+                        _ = self.xwrap.as_mut().unwrap().wait_readable() => {
+                            let event_in_queue = self.xwrap.as_ref().unwrap().queue_len();
                             for _ in 0..event_in_queue {
-                                let xlib_event = self.xwrap.get_next_event();
+                                let xlib_event = self.xwrap.as_ref().unwrap().get_next_event();
                                 self.handle_event(&xlib_event);
                             }
                         }
@@ -131,7 +144,7 @@ impl Worker {
     }
 
     fn handle_key_press(&mut self, event: &xlib::XKeyEvent) -> Error {
-        let key = self.xwrap.keycode_to_keysym(event.keycode);
+        let key = self.xwrap.as_ref().unwrap().keycode_to_keysym(event.keycode);
         let mask = xkeysym_lookup::clean_mask(event.state);
         if let Some(keybind) = self.get_keybind((mask, key)) {
             if let Ok(command) = command::denormalize(&keybind.command) {
@@ -163,7 +176,7 @@ impl Worker {
 
     fn handle_mapping_notify(&self, event: &mut xlib::XMappingEvent) -> Error {
         if event.request == xlib::MappingModifier || event.request == xlib::MappingKeyboard {
-            return self.xwrap.refresh_keyboard(event);
+            return self.xwrap.as_ref().unwrap().refresh_keyboard(event);
         }
         Ok(())
     }
